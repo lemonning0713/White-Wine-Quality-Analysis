@@ -1,0 +1,198 @@
+---
+title: "ANLY 512 - Extra Credit"
+author: "Shiqi Ning"
+date: "5/9/2019"
+output: html_document
+---
+
+# Introduction
+This dataset is downloaded from the UCI machine learning repository (https://archive.ics.uci.edu/ml/datasets/Wine+Quality). The dataset is related to white variants of the Portuguese "Vinho Verde" wine. 
+
+In this problem, I'm going to classify different wine into different quality groups with different characteristics of wine (eg. acidity, sweetness, density, pH, etc.). Specifically, I'm going to group the quality score into two groups, with the quality score greater or equal to 6 being classified as 1: good quality and the rest quality score below 6 as 0: poor quality. I will also perform feature selections (Lasso) to choose the most relavent characteristics and fit the model. In addition, I will split the data into training and test set to check the performance of my model. And I will use Logistic Regression and Naive Bayes for the classification.
+
+
+```{r, warning = FALSE, results = 'hide'}
+#Import libraries
+require(glmnet)
+require(psych)
+require(ROCR)
+require(pROC)
+require(e1071)
+```
+
+
+## Exploratory Analysis
+```{r, results = 'hold'}
+# Load dataset
+data = read.csv("winequality-white.csv", sep=";")
+colnames(data) = c("fixed.acid", "vola.acid", "citric.acid", "sugar", "chlorides", "free.SO2", "tot.SO2", "density", "pH", "sulphates", "alcohol", "quality")
+#head(data)
+#str(data)
+cat("Summary of the dataset:\n")
+summary(data)
+
+# Check the dimension of the data
+cat("\n\nThe dataset contains", dim(data)[1], "attributes, and", dim(data)[2], "instances.\n")
+
+# Check for na values
+cat("\nThere is", sum(colSums(is.na(data))), "NA values in the dataset.")
+
+# Table showing the counts for each score
+cat("\n\nTable showing the counts for each quality score:\n")
+table(data$quality)
+
+# Assign quality score with binary representation
+data$class = 0
+data$class[data$quality >= 6] = 1
+data$class = data$class
+
+# Scale the dataset for ML
+scaled_data = scale(data[, -(ncol(data)-1): -ncol(data)])
+
+# Plot boxplot
+par(mfrow = c(1, 2))
+boxplot(data[, -ncol(data)],
+  main = "Boxplots For Each Attribute",
+  ylab = "Value",
+  col = "lightsalmon1",
+  border = "lightskyblue4",
+  las = 2
+  )
+boxplot(scaled_data,
+  main = "Boxplots For Scaled Attribute",
+  ylab = "Value",
+  col = "lightsalmon1",
+  border = "lightskyblue4",
+  las = 2
+  )
+```
+
+From the boxplots, we can see that the attibutes free.SO2 and tot.SO2 have higher values than others, which may further affect the classification result, so I did a normalization on the data. After normalizing, the data seems to have the same level. Then, I will use Lasso to perform feature selection and compare the full model with the model chosen by Lasso.
+
+
+# Fit Logistic Regression Model
+
+## Prepare Training and Test Set
+```{r, results = 'hold'}
+set.seed(810)
+# Prepare dataset
+scaled_df = data.frame(scaled_data, class = as.factor(data$class))
+scaled_index = sample(1:nrow(scaled_df), nrow(scaled_df)*0.7)
+train_scaled = scaled_df[scaled_index, ]
+test_scaled = scaled_df[-scaled_index, ]
+```
+
+
+I use Logistic Regression model because, it is a predictive analysis tool that uses a logistic function to model a binary variable, which is suitable for my problem.  
+```{r, results = 'hold'}
+# Fit logistic regression model
+fit_full = glm(class  ~ ., data = train_scaled, family = binomial)
+probs_full = predict(fit_full, test_scaled, type="response")
+
+# Confusion matrix
+pred_full = ifelse(probs_full > 0.6, 1, 0)
+table_full = table(pred_full, test_scaled$class)
+table_full
+
+# Function calculating the prediction error
+predict_error = function(conf_mat){
+  error = (conf_mat[1,2] + conf_mat[2,1])/(conf_mat[1,1] + conf_mat[1,2] + conf_mat[2,1] + conf_mat[2,2])
+  accuracy = (conf_mat[1,1] + conf_mat[2,2])/(conf_mat[1,1] + conf_mat[1,2] + conf_mat[2,1] + conf_mat[2,2])
+  return(error)
+}
+# Print our results
+cat("\nThe prediction accuracy for Naive Bayes on test set is", 1 - predict_error(table_full))
+cat("\nThe prediction error for Naive Bayes on test set is", predict_error(table_full))
+
+
+# Plot the roc curve and calculate the auc
+plot(roc(test_scaled$class, probs_full), print.auc = TRUE, col = "lightsalmon1")
+```
+
+
+## Feature Selection With Lasso
+```{r, results = 'hold'}
+# Produce a matrix to the predictors
+train_mat = model.matrix(class  ~ ., data = train_scaled)
+test_mat = model.matrix(class  ~ ., data = test_scaled)
+
+# Use CV to find lambda of lasso
+lasso_cv = cv.glmnet(train_mat, as.numeric(train_scaled$class) , alpha = 1)
+# Find the min lambda
+lam = lasso_cv$lambda.1se
+
+# Predict using test set
+lasso_predict = predict(lasso_cv, s = lam, newx = test_mat)
+cat("The test error obtained by Lasso is", mean((test_scaled$class - lasso_predict)^2), "\nLambda:", lam)
+
+#plot(lasso_cv, label = TRUE, xvar = "lambda", lwd = 3)
+lasso = glmnet(train_mat, as.numeric(train_scaled$class), alpha = 1, lambda = lam)
+
+# Print non-zero coefficient estimates
+predict(lasso, s = lam, type = "coefficients")
+
+# Fit logistic regression model chosen by Lasso
+fit_lasso = glm(class ~ fixed.acid + vola.acid + sugar + free.SO2 + sulphates + alcohol, data = train_scaled, family = binomial)
+probs_lasso = predict(fit_lasso, test_scaled, type="response")
+
+# Confusion matrix
+pred_lasso = ifelse(probs_lasso > 0.6, 1, 0)
+table_lasso = table(pred_lasso, test_scaled$class)
+table_lasso
+
+# Print our results
+cat("\nThe prediction accuracy for Naive Bayes on test set is", 1 - predict_error(table_lasso))
+cat("\nThe prediction error for Naive Bayes on test set is", predict_error(table_lasso))
+
+
+# Plot the roc curve and calculate the auc
+plot(roc(test_scaled$class, probs_lasso), print.auc = TRUE, col = "lightskyblue4")
+lines(roc(test_scaled$class, probs_full), col = "lightsalmon1")
+legend("bottomright", c("ROC with lasso model", "ROC with full model"), lty = 1, lwd = 2, col = c("lightskyblue4", "lightsalmon1", bty="n"))
+```
+
+Since I want to check if there exists certain variables that conttributes significantly more to the score quality group, I choose to perform Lasso cross validation to choose an appropiate lambda value and to identift important varibles. Because Lasso can produce a simpler and more interpretable model that involve only a subset of the predictors, and probably lead to better prediction accuracy. 
+From the above results, we can see that the Lasso chose variables fixed.acid, vola.acid, sugar, free.SO2, sulphates, and alcohol. However,  after fitting the model using only these variables, the lasso model accuracy rate and the AUC score (accuracy rate: 0.7564626, AUC: 0.808) on the test set are all smaller than that of the full model (0.7578231, AUC: 0.803), . This could indicate all the characteristics (variables) of wine are important for making a classification. And thus the full model is chosen.
+
+
+```{r, results = 'hold'}
+# Print out model summary
+summary(fit_full)
+```
+
+From the full logistic regression model, the prediction accuracy rate is 75.78%, and Area Under ROC curve is 0.808, which is quite good. Since, it can correctly make classification more than 75% of the data.
+
+
+## Naive Bayes Classifier
+Source: https://www.rdocumentation.org/packages/e1071/versions/1.7-1/topics/naiveBayes
+
+The reason for me to choose Naive Bayes Classifier is that it uses Bayes Theroem and conditional probability to separate classe. It is said that Naive Bayes has a higher bias but lower variance compared to logistic regression. If the data set follows the bias then Naive Bayes will be a better classifier. That's the reason for me to choose this classifier.
+```{r, results = 'hold'}
+# Check for correlation
+pairs.panels(data[,-(12:13)])
+
+# Fit Naive Bayes model
+nb = naiveBayes(class  ~ . - density - tot.SO2, data = train_scaled)
+nb
+
+# Predict on test data
+pred_nb = predict(nb, test_scaled[, -12], type = "class")
+table_nb <- table(pred_nb, test_scaled$class)
+table_nb
+
+# Print our results
+cat("\nThe prediction accuracy for Naive Bayes on test set is", 1 - predict_error(table_nb))
+cat("\nThe prediction error for Naive Bayes on test set is", predict_error(table_nb))
+
+```
+
+From the scatter plot showing the potential correlation, I found that sugar and density as well as free.SO2 and tot.SO2 seems to have a relatively stronger correlation, so I removed density and tot.SO2, also because Lasso have indicated them as non-important variables. And from the prediction result, we can see that the prediction accuracy for Naive Bayes Classifier is 0.7047619, which is lower than that of Logistic Regression, which is 0.7578231. Thus, the Logistic Regression model will all the variables has a better performance.
+
+
+# Conclusion
+For this problem, which is to predict the white wine quality group, the quality variable was transformed into binary data, with quality score >= 6 set as 1, and quality score <6 set as 0. For better and more accuracy results, the data is scaled to have mean 0 and standard deviation of 1. By comparing the results of logistic model containing all variables (accuracy rate: 75.78%) with the model chosen by Lasso, the former one has a higher AUC score on test set, indicating a better performance. Then, the Naive Bayes Classifier was used to perform classification, however, the result (accuracy rate: 70.48%) does not outperform than the logistic model containing all variables. I would say a prediction accuracy rate of 75% is quite good for a classification problem of this kind.
+
+Open questions: 
+1. It has been observed that there exist some quality score with extreme values, whether these extreme observarion will affect greatly on the prediction result is unknown, and can be done in future work.
+2. Besides the variables in this dataset, I'm also wondering if the year, producing area, company of the white wine also affect the quality score.
+3. I'm also wondering if other machine learning algorithms such as unsupervised learning method (eg, Random Forest, Bagging, Kmeans or Hierarchical clustering) would perform in terms of prediction accuracy.
